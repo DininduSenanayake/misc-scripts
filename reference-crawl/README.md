@@ -8,4 +8,3 @@ To use this script:
 * Install the required libraries: `pip install requests beautifulsoup4`
 
 
-Please note that web scraping can be fragile if websites change their structure. Also, 
