@@ -1,0 +1,246 @@
+#!/bin/bash
+#
+# enhanced-nn-seff - Enhanced NeSI Slurm Efficiency with visualization
+#
+# Usage: enhanced-nn-seff [Options] <JobID>
+#        Options:
+#        -M    Cluster
+#        -h    Help
+#        -j    JobID
+#        -v    Version
+
+# ANSI color codes
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+RED='\033[0;31m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+WHITE='\033[0;37m'
+BOLD='\033[1m'
+NC='\033[0m' # No Color
+
+# Function to print usage
+print_usage() {
+    echo "Usage: enhanced-nn-seff [Options] <JobID>"
+    echo "       Options:"
+    echo "       -M    Cluster"
+    echo "       -h    Help"
+    echo "       -j    JobID"
+    echo "       -v    Version"
+}
+
+# Process options
+while getopts ":hvj:M:" opt; do
+  case $opt in
+    h)
+      print_usage
+      exit 0
+      ;;
+    v)
+      echo "NeSI Enhanced version of seff"
+      exit 0
+      ;;
+    j)
+      JOB_ID=$OPTARG
+      ;;
+    M)
+      CLUSTER="-M $OPTARG"
+      ;;
+    \?)
+      echo "Invalid option: -$OPTARG" >&2
+      print_usage
+      exit 1
+      ;;
+    :)
+      echo "Option -$OPTARG requires an argument." >&2
+      print_usage
+      exit 1
+      ;;
+  esac
+done
+
+# Shift option index so that $1 is the first non-option argument
+shift $((OPTIND-1))
+
+# If there's a positional argument, use it as the job ID
+if [ -z "$JOB_ID" ] && [ $# -gt 0 ]; then
+    JOB_ID=$1
+fi
+
+# Ensure we have a job ID
+if [ -z "$JOB_ID" ]; then
+    print_usage
+    exit 1
+fi
+
+# Function to generate progress bar
+generate_bar() {
+    local percentage=$1
+    local width=30
+    local filled=$(echo "scale=0; $percentage * $width / 100" | bc)
+    
+    # Make sure filled is not negative
+    if [ -z "$filled" ] || [ "$filled" -lt 0 ]; then
+        filled=0
+    fi
+    
+    local bar=""
+    
+    for ((i=0; i<$filled; i++)); do
+        bar+="█"
+    done
+    
+    for ((i=$filled; i<$width; i++)); do
+        bar+="░"
+    done
+    
+    echo "$bar"
+}
+
+# Run original nn_seff and capture the output
+NN_SEFF_OUTPUT=$(nn_seff $CLUSTER $JOB_ID 2>&1)
+
+# Check if command failed or job not found
+if [ $? -ne 0 ]; then
+    echo "$NN_SEFF_OUTPUT"
+    exit 1
+fi
+
+# Parse the output
+CLUSTER=$(echo "$NN_SEFF_OUTPUT" | grep "Cluster:" | awk '{print $2}')
+JOB_ID=$(echo "$NN_SEFF_OUTPUT" | grep "Job ID:" | awk '{print $3}')
+STATE=$(echo "$NN_SEFF_OUTPUT" | grep "State:" | awk '{print $2}')
+CORES=$(echo "$NN_SEFF_OUTPUT" | grep "Cores:" | awk '{print $2}')
+TASKS=$(echo "$NN_SEFF_OUTPUT" | grep "Tasks:" | awk '{print $2}')
+NODES=$(echo "$NN_SEFF_OUTPUT" | grep "Nodes:" | awk '{print $2}')
+
+WALL_LINE=$(echo "$NN_SEFF_OUTPUT" | grep "Job Wall-time:")
+WALL_PERCENT=$(echo "$WALL_LINE" | awk '{print $3}' | tr -d '%')
+WALL_USED=$(echo "$WALL_LINE" | awk '{print $4}')
+WALL_LIMIT=$(echo "$WALL_LINE" | awk '{print $6}')
+
+CPU_LINE=$(echo "$NN_SEFF_OUTPUT" | grep "CPU Efficiency:")
+CPU_PERCENT=$(echo "$CPU_LINE" | awk '{print $3}' | tr -d '%')
+CPU_USED=$(echo "$CPU_LINE" | awk '{print $4}')
+CPU_TOTAL=$(echo "$CPU_LINE" | awk '{print $6}')
+
+MEM_LINE=$(echo "$NN_SEFF_OUTPUT" | grep "Mem Efficiency:")
+MEM_PERCENT=$(echo "$MEM_LINE" | awk '{print $3}' | tr -d '%')
+MEM_USED=$(echo "$MEM_LINE" | awk '{print $4,$5}')
+MEM_TOTAL=$(echo "$MEM_LINE" | awk '{print $7,$8}')
+
+# Handle the case of memory with multiple parts
+if [[ "$MEM_LINE" == *"("* ]]; then
+    # Complex memory line with per-node or per-task breakdown
+    MEM_USED=$(echo "$MEM_LINE" | sed -E 's/.*Efficiency:[ ]+[0-9.]+%[ ]+([^ ]+)[ ]+\(([^)]+)\).*/\1 (\2)/')
+    MEM_TOTAL=$(echo "$MEM_LINE" | sed -E 's/.*of[ ]+([^ ]+)[ ]+\(([^)]+)\).*/\1 (\2)/')
+fi
+
+# Determine colors based on state and efficiency
+if [[ "$STATE" == "COMPLETED" ]]; then
+    STATE_COLOR=$GREEN
+elif [[ "$STATE" == "RUNNING" ]]; then
+    STATE_COLOR=$BLUE
+elif [[ "$STATE" == "PENDING" ]]; then
+    STATE_COLOR=$YELLOW
+else
+    STATE_COLOR=$RED
+fi
+
+if (( $(echo "$CPU_PERCENT >= 70" | bc -l) )); then
+    CPU_COLOR=$GREEN
+elif (( $(echo "$CPU_PERCENT >= 30" | bc -l) )); then
+    CPU_COLOR=$YELLOW
+else
+    CPU_COLOR=$RED
+fi
+
+if (( $(echo "$MEM_PERCENT >= 90" | bc -l) )); then
+    MEM_COLOR=$YELLOW
+elif (( $(echo "$MEM_PERCENT >= 30" | bc -l) )); then
+    MEM_COLOR=$GREEN
+else
+    MEM_COLOR=$RED
+fi
+
+if (( $(echo "$WALL_PERCENT >= 80" | bc -l) )); then
+    WALL_COLOR=$YELLOW
+elif (( $(echo "$WALL_PERCENT >= 20" | bc -l) )); then
+    WALL_COLOR=$GREEN
+else
+    WALL_COLOR=$BLUE
+fi
+
+# Generate progress bars
+WALL_BAR=$(generate_bar $WALL_PERCENT)
+CPU_BAR=$(generate_bar $CPU_PERCENT)
+MEM_BAR=$(generate_bar $MEM_PERCENT)
+
+# Print header
+echo -e "\n${BOLD}${BLUE}═════════════════════════════════════════════════════════════${NC}"
+echo -e "${BOLD}${BLUE}  NeSI SLURM JOB EFFICIENCY REPORT${NC}"
+echo -e "${BOLD}${BLUE}═════════════════════════════════════════════════════════════${NC}\n"
+
+# Print job information section
+echo -e "${BOLD}${CYAN}JOB INFORMATION${NC}"
+echo -e "${BOLD}─────────────────────────────────────────────────────────────${NC}"
+echo -e "${BOLD}Cluster:${NC} $CLUSTER"
+echo -e "${BOLD}Job ID:${NC} $JOB_ID"
+echo -e "${BOLD}State:${NC} ${STATE_COLOR}$STATE${NC}"
+echo -e "${BOLD}Cores:${NC} $CORES"
+echo -e "${BOLD}Tasks:${NC} $TASKS"
+echo -e "${BOLD}Nodes:${NC} $NODES"
+echo -e "\n"
+
+# Print efficiency metrics section
+echo -e "${BOLD}${CYAN}EFFICIENCY METRICS${NC}"
+echo -e "${BOLD}─────────────────────────────────────────────────────────────${NC}"
+
+# Wall-time efficiency
+echo -e "${BOLD}Job Wall-time:${NC}"
+echo -e "${WALL_COLOR}$WALL_BAR${NC} ${WALL_COLOR}$WALL_PERCENT%${NC}"
+echo -e "Used: $WALL_USED of $WALL_LIMIT time limit\n"
+
+# CPU efficiency
+echo -e "${BOLD}CPU Efficiency:${NC}"
+echo -e "${CPU_COLOR}$CPU_BAR${NC} ${CPU_COLOR}$CPU_PERCENT%${NC}"
+echo -e "Used: $CPU_USED of $CPU_TOTAL core-walltime\n"
+
+# Memory efficiency
+echo -e "${BOLD}Mem Efficiency:${NC}"
+echo -e "${MEM_COLOR}$MEM_BAR${NC} ${MEM_COLOR}$MEM_PERCENT%${NC}"
+echo -e "Used: $MEM_USED of $MEM_TOTAL\n"
+
+# Optimization tips
+echo -e "${BOLD}${YELLOW}OPTIMIZATION TIPS${NC}"
+echo -e "${BOLD}─────────────────────────────────────────────────────────────${NC}"
+
+# CPU optimization tips
+if (( $(echo "$CPU_PERCENT < 30" | bc -l) )); then
+    echo -e "${RED}• CPU efficiency is very low. Consider requesting fewer cores for similar jobs${NC}"
+elif (( $(echo "$CPU_PERCENT < 70" | bc -l) )); then
+    echo -e "${YELLOW}• Consider requesting fewer cores to improve CPU efficiency${NC}"
+fi
+
+# Memory optimization tips
+if (( $(echo "$MEM_PERCENT > 90" | bc -l) )); then
+    echo -e "${YELLOW}• Memory usage is close to limit, consider increasing memory for similar jobs${NC}"
+elif (( $(echo "$MEM_PERCENT < 30" | bc -l) )); then
+    echo -e "${RED}• Memory efficiency is very low. Consider requesting less memory${NC}"
+fi
+
+# Wall-time optimization tips
+if (( $(echo "$WALL_PERCENT < 20" | bc -l) )); then
+    echo -e "${YELLOW}• Job completed much faster than the time limit. Consider setting a shorter time limit${NC}"
+fi
+
+# If no tips were printed
+if (( $(echo "$CPU_PERCENT >= 70" | bc -l) )) && 
+   (( $(echo "$MEM_PERCENT >= 30" | bc -l) )) && 
+   (( $(echo "$MEM_PERCENT <= 90" | bc -l) )) && 
+   (( $(echo "$WALL_PERCENT >= 20" | bc -l) )); then
+    echo -e "${GREEN}• Resource allocation appears optimal for this job${NC}"
+fi
+
+echo -e "\n${BOLD}${BLUE}═════════════════════════════════════════════════════════════${NC}\n"
