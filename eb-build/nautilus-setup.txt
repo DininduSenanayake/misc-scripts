@@ -1,0 +1,4 @@
+$ mkdir -p ~/nesi-nobackup
+$ mkdir -p ~/nesi-project
+$ sshfs -oauto_cache,follow_symlinks nesi:/nesi/nobackup/xxxXXXXX ~/nesi-nobackup/
+$ sshfs -oauto_cache,follow_symlinks nesi:/nesi/project/xxxXXXXX ~/nesi-project/
